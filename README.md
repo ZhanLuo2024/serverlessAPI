@@ -1,14 +1,31 @@
-# Welcome to your CDK TypeScript project
+# Serverless API
 
-This is a blank project for CDK development with TypeScript.
+This is a serverless API for managing movie reviews, built using AWS CDK and deployed on AWS.
 
-The `cdk.json` file tells the CDK Toolkit how to execute your app.
+## 🚀 Features
+- **Get reviews for a movie** (`GET /movies/reviews/{movieId}`)
+- **Add a new review** (`POST /movies/reviews`)
+- **Update a review** (`PUT /movies/{movieId}/reviews/{reviewId}`)
+- **Translate a review** (`GET /reviews/{reviewId}/{movieId}/translation?language=code`)
+- **Authentication using AWS Cognito**
 
-## Useful commands
+## 🛠️ Installation
+1. **Clone the repository**:
+   ```bash
+   git clone https://github.com/ZhanLuo2024/serverlessAPI.git
+   
+2. **Install dependencies**:
+    ```bash
+   npm install
+   
+3. **Deployment**:
+    ```bash
+   cdk deploy
 
-* `npm run build`   compile typescript to js
-* `npm run watch`   watch for changes and compile
-* `npm run test`    perform the jest unit tests
-* `npx cdk deploy`  deploy this stack to your default AWS account/region
-* `npx cdk diff`    compare deployed stack with current state
-* `npx cdk synth`   emits the synthesized CloudFormation template
+## TODO:
+- Setup API Gateway
+- Implement GET /movies/reviews/{movieId}
+- Implement POST /movies/reviews (authentication required)
+- Implement PUT /movies/{movieId}/reviews/{reviewId}
+- Implement Amazon Translate integration
+- Improve security and performance
