@@ -1,16 +1,55 @@
 import * as cdk from 'aws-cdk-lib';
-import { Construct } from 'constructs';
-// import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
+import * as apigateway from "aws-cdk-lib/aws-apigateway";
 
-export class CdkStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+export class ServerlessAPIStack extends cdk.Stack {
+  constructor(scope: cdk.App, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // The code that defines your stack goes here
+    /**
+     *  create DynamoDB table
+     *  set partitionKey
+     *  set sortKey
+     *  */
+    const movieReviewsTable = new dynamodb.Table(this, 'MovieReviews', {
+      partitionKey: {name: 'MovieId', type: dynamodb.AttributeType.STRING},
+      sortKey: {name: 'ReviewId', type: dynamodb.AttributeType.STRING},
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
 
-    // example resource
-    // const queue = new sqs.Queue(this, 'CdkQueue', {
-    //   visibilityTimeout: cdk.Duration.seconds(300)
-    // });
+    /**
+     * create lambda function
+     **/
+    const getReviewsLambda = new NodejsFunction(this, 'GetReviewsLambda', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      entry: 'lambda/getReviews.ts', 
+      handler: 'handler',
+      environment: {
+        TABLE_NAME: movieReviewsTable.tableName,
+      },
+    });
+
+    /**
+     * Giving Lambda access to DynamoDB
+     * */
+    movieReviewsTable.grantReadData(getReviewsLambda);
+
+    /**
+     * API Gateway
+     * */
+    const api = new apigateway.RestApi(this, 'MovieReviewAPI', {
+      restApiName: 'Movie Review Service',
+    });
+
+    /**
+     * create API endpoint GET /movies/reviews/{movieId}
+     * */
+    const movies = api.root.addResource('movies');
+    const reviews = movies.addResource('reviews');
+    const movieId = reviews.addResource('{movieId}');
+
+    movieId.addMethod('GET', new apigateway.LambdaIntegration(getReviewsLambda));
   }
 }
