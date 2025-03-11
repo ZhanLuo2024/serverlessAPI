@@ -24,7 +24,7 @@ export class ServerlessAPIStack extends cdk.Stack {
      **/
     const getReviewsLambda = new NodejsFunction(this, 'GetReviewsLambda', {
       runtime: lambda.Runtime.NODEJS_18_X,
-      entry: 'lambda/getReviews.ts', 
+      entry: 'lambda/getReviews.ts',
       handler: 'handler',
       environment: {
         TABLE_NAME: movieReviewsTable.tableName,
