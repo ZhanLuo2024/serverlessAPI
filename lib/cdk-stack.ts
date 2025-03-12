@@ -21,6 +21,7 @@ export class ServerlessAPIStack extends cdk.Stack {
 
     /**
      * create lambda function
+     * GET Reviews
      **/
     const getReviewsLambda = new NodejsFunction(this, 'GetReviewsLambda', {
       runtime: lambda.Runtime.NODEJS_18_X,
@@ -32,9 +33,23 @@ export class ServerlessAPIStack extends cdk.Stack {
     });
 
     /**
+     * create lambda function
+     * POST Create Review
+     * */
+    const createReviewLambda = new NodejsFunction(this, 'CreateReviewLambda', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      entry: 'lambda/createReview.ts',
+      handler: 'handler',
+      environment: {
+        TABLE_NAME: movieReviewsTable.tableName,
+      },
+    });
+
+    /**
      * Giving Lambda access to DynamoDB
      * */
     movieReviewsTable.grantReadData(getReviewsLambda);
+    movieReviewsTable.grantWriteData(createReviewLambda);
 
     /**
      * API Gateway
@@ -50,6 +65,8 @@ export class ServerlessAPIStack extends cdk.Stack {
     const reviews = movies.addResource('reviews');
     const movieId = reviews.addResource('{movieId}');
 
+    // Lambda Trigger
     movieId.addMethod('GET', new apigateway.LambdaIntegration(getReviewsLambda));
+    reviews.addMethod('POST', new apigateway.LambdaIntegration(createReviewLambda));
   }
 }
