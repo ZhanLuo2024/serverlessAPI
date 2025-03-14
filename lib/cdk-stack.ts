@@ -21,6 +21,15 @@ export class ServerlessAPIStack extends cdk.Stack {
     });
 
     /**
+     * Added GSI to support TargetLanguage
+     * */
+    movieReviewsTable.addGlobalSecondaryIndex({
+      indexName: "TargetLanguageIndex",
+      partitionKey: { name: "ReviewId", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "TargetLanguage", type: dynamodb.AttributeType.STRING }
+    });
+
+    /**
      * create lambda function
      * GET Reviews
      **/
@@ -72,6 +81,13 @@ export class ServerlessAPIStack extends cdk.Stack {
     translateReviewLambda.addToRolePolicy(new iam.PolicyStatement({
       actions: ["translate:TranslateText"],
       resources: ["*"],
+    }));
+
+    /**
+     * Allow translatelambda have write permission*/
+    translateReviewLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["dynamodb:PutItem"],
+      resources: [movieReviewsTable.tableArn],
     }));
 
     /**

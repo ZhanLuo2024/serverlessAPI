@@ -1,18 +1,26 @@
-import { DynamoDBClient, GetItemCommand } from "@aws-sdk/client-dynamodb";
+import {
+    DynamoDBClient,
+    GetItemCommand,
+    PutItemCommand,
+    QueryCommand,
+    PutItemCommandInput
+} from "@aws-sdk/client-dynamodb";
 import { TranslateClient, TranslateTextCommand } from "@aws-sdk/client-translate";
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
 
 const dynamoDbClient = new DynamoDBClient({});
 const translateClient = new TranslateClient({});
+const TABLE_NAME = process.env.TABLE_NAME || "";
+const INDEX_NAME = "TargetLanguageIndex";
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
     try {
-        // Parsing Parameters from the API Gateway
+        // Parse API Gateway Request Parameters
         const reviewId = event.pathParameters?.reviewId;
         const movieId = event.pathParameters?.movieId;
         const targetLanguage = event.queryStringParameters?.language;
 
-        // Validate required parameters
+        // Validation Parameters
         if (!reviewId || !movieId || !targetLanguage) {
             return {
                 statusCode: 400,
@@ -20,23 +28,52 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
             };
         }
 
+        // Query the DynamoDB cache to see if the translation result already exists
+        const cacheParams = {
+            TableName: TABLE_NAME,
+            IndexName: INDEX_NAME,
+            KeyConditionExpression: "ReviewId = :r AND TargetLanguage = :t",
+            ExpressionAttributeValues: {
+                ":r": { S: reviewId },
+                ":t": { S: targetLanguage }
+            }
+        };
 
-        // Getting Movie Reviews from DynamoDB
-        const params = {
-            TableName: process.env.TABLE_NAME,
+        const cacheResult = await dynamoDbClient.send(new QueryCommand(cacheParams));
+
+        if (cacheResult.Items?.length && cacheResult.Items.length > 0) {
+            const cachedItem = cacheResult.Items[0];
+            return {
+                statusCode: 200,
+                body: JSON.stringify({
+                    movieId,
+                    reviewId,
+                    targetLanguage,
+                    originalText: cachedItem?.OriginalContent?.S ?? "N/A",
+                    translatedText: cachedItem?.TranslatedText?.S ?? "N/A"
+                })
+            };
+        }
+
+        // If there is no cache, then query the original comment.
+        const getOriginalParams = {
+            TableName: TABLE_NAME,
             Key: {
                 "MovieId": { S: movieId },
                 "ReviewId": { S: reviewId }
             }
         };
 
-        const { Item } = await dynamoDbClient.send(new GetItemCommand(params));
+        const originalItem = await dynamoDbClient.send(new GetItemCommand(getOriginalParams));
 
-        if (!Item || !Item.Content) {
-            return { statusCode: 404, body: JSON.stringify({ error: "Review not found" }) };
+        if (!originalItem.Item || !originalItem.Item.Content || !originalItem.Item.Content.S) {
+            return {
+                statusCode: 404,
+                body: JSON.stringify({ error: "Review not found" })
+            };
         }
 
-        const originalText = Item.Content.S;
+        const originalText = originalItem.Item.Content.S;
 
         // Call AWS Translate for translation
         const translateParams = {
@@ -46,19 +83,36 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         };
 
         const translation = await translateClient.send(new TranslateTextCommand(translateParams));
+        const translatedText = translation.TranslatedText;
 
+        // Storing translation results into DynamoDB as a cache
+        const putParams: PutItemCommandInput = {
+            TableName: TABLE_NAME,
+            Item: {
+                "MovieId": { S: movieId },
+                "ReviewId": { S: reviewId },
+                "TargetLanguage": { S: targetLanguage },
+                "TranslatedText": { S: translatedText ?? "N/A" },
+                "OriginalContent": { S: originalText ?? "N/A" }
+            }
+        };
+
+
+        await dynamoDbClient.send(new PutItemCommand(putParams));
+
+        // return result
         return {
             statusCode: 200,
             body: JSON.stringify({
                 movieId,
                 reviewId,
+                targetLanguage,
                 originalText,
-                translatedText: translation.TranslatedText
+                translatedText
             })
         };
-    } catch (error) {
+    } catch (error: any) {
         console.error("Translation Error:", error);
-        return { statusCode: 500, body: JSON.stringify({ error: "Internal Server Error" }) };
+        return { statusCode: 500, body: JSON.stringify({ error: "Internal Server Error", details: error.message }) };
     }
-
 };
