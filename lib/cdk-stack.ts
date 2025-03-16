@@ -37,6 +37,8 @@ export class ServerlessAPIStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_18_X,
       entry: 'lambda/getReviews.ts',
       handler: 'handler',
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(10),
       environment: {
         TABLE_NAME: movieReviewsTable.tableName,
       },
@@ -50,6 +52,8 @@ export class ServerlessAPIStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_18_X,
       entry: 'lambda/createReview.ts',
       handler: 'handler',
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(10),
       environment: {
         TABLE_NAME: movieReviewsTable.tableName,
       },
@@ -63,6 +67,23 @@ export class ServerlessAPIStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_18_X,
       entry: 'lambda/translateReview.ts',
       handler: 'handler',
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(10),
+      environment: {
+        TABLE_NAME: movieReviewsTable.tableName
+      }
+    });
+
+    /**
+     * create lambda function
+     * PUT update review
+     * */
+    const updateReviewLambda = new NodejsFunction(this, 'UpdateReviewLambda', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      entry: 'lambda/updateReview.ts',
+      handler: 'handler',
+      memorySize: 256,
+      timeout: cdk.Duration.seconds(10),
       environment: {
         TABLE_NAME: movieReviewsTable.tableName
       }
@@ -74,6 +95,7 @@ export class ServerlessAPIStack extends cdk.Stack {
     movieReviewsTable.grantReadData(getReviewsLambda);
     movieReviewsTable.grantWriteData(createReviewLambda);
     movieReviewsTable.grantReadData(translateReviewLambda);
+    movieReviewsTable.grantReadWriteData(updateReviewLambda);
 
     /**
      * Allow Lambda function access AWS Translate
@@ -89,6 +111,14 @@ export class ServerlessAPIStack extends cdk.Stack {
       actions: ["dynamodb:PutItem"],
       resources: [movieReviewsTable.tableArn],
     }));
+
+    /**
+     * Allow update lambda function have read and write permission*/
+    updateReviewLambda.addToRolePolicy(new iam.PolicyStatement({
+      actions: ["dynamodb:UpdateItem", "dynamodb:GetItem"],
+      resources: [movieReviewsTable.tableArn],
+    }));
+
 
     /**
      * API Gateway
@@ -133,5 +163,7 @@ export class ServerlessAPIStack extends cdk.Stack {
     // GET /movies/reviews/{movieId}/reviews/{reviewId}/translation
     translation.addMethod('GET', new apigateway.LambdaIntegration(translateReviewLambda));
 
+    // PUT /movies/reviews/{movieId}/reviews/{reviewId}
+    reviewId.addMethod("PUT", new apigateway.LambdaIntegration(updateReviewLambda));
   }
 }
