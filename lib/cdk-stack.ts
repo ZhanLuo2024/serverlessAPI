@@ -4,6 +4,8 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as apigateway from "aws-cdk-lib/aws-apigateway";
 import * as iam from "aws-cdk-lib/aws-iam";
+// cognito
+import { createCognito } from "../cognito/cognito";
 
 export class ServerlessAPIStack extends cdk.Stack {
   constructor(scope: cdk.App, id: string, props?: cdk.StackProps) {
@@ -129,6 +131,18 @@ export class ServerlessAPIStack extends cdk.Stack {
     });
 
     /**
+     * Cognito
+     * */
+    const { userPool, userPoolClient } = createCognito(this)
+
+    /**
+     * Cognito Authorizer
+     * */
+    const authorizer = new apigateway.CognitoUserPoolsAuthorizer(this, 'APIGatewayCognitoAuthorizer', {
+      cognitoUserPools: [userPool]
+    });
+
+    /**
      *  API endpoint
      */
 
@@ -157,13 +171,30 @@ export class ServerlessAPIStack extends cdk.Stack {
     // GET /movies/reviews/{movieId}
     movieId.addMethod('GET', new apigateway.LambdaIntegration(getReviewsLambda));
 
-    // POST /movies/reviews
-    reviews.addMethod('POST', new apigateway.LambdaIntegration(createReviewLambda));
+    /**
+     * POST /movies/reviews
+     * Binding authorizer to POST API
+     * */
+    reviews.addMethod("POST", new apigateway.LambdaIntegration(createReviewLambda), {
+      authorizer,
+      authorizationType: apigateway.AuthorizationType.COGNITO
+    });
 
     // GET /movies/reviews/{movieId}/reviews/{reviewId}/translation
     translation.addMethod('GET', new apigateway.LambdaIntegration(translateReviewLambda));
 
-    // PUT /movies/reviews/{movieId}/reviews/{reviewId}
-    reviewId.addMethod("PUT", new apigateway.LambdaIntegration(updateReviewLambda));
+    /**
+     * PUT /movies/reviews/{movieId}/reviews/{reviewId}
+     * Binding authorizer to PUT API
+     * */
+    reviewId.addMethod("PUT", new apigateway.LambdaIntegration(updateReviewLambda), {
+      authorizer,
+      authorizationType: apigateway.AuthorizationType.COGNITO
+    });
+
+
+
+
+
   }
 }

@@ -10,6 +10,13 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
             return { statusCode: 400, body: JSON.stringify({ error: "Request body is required" }) };
         }
 
+        if (!event.requestContext || !event.requestContext.authorizer) {
+            return {
+                statusCode: 401,
+                body: JSON.stringify({ message: "Unauthorized - Missing Cognito Auth" })
+            };
+        }
+
         // decode JSON
         const { movieId, reviewId, reviewerId, content } = JSON.parse(event.body);
 
@@ -36,7 +43,10 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         // respond
         return {
             statusCode: 201,
-            body: JSON.stringify({ message: "Review added successfully", reviewId })
+            body: JSON.stringify({
+                message: "request authorized and Review added successfully", reviewId,
+                user: event.requestContext.authorizer,
+            })
         };
 
     } catch (error) {
