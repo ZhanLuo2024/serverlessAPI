@@ -1,69 +1,85 @@
-import { DynamoDBClient, UpdateItemCommand, GetItemCommand, ReturnValue } from "@aws-sdk/client-dynamodb";
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
+import * as AWS from "aws-sdk";
 
-
-const dynamoDbClient = new DynamoDBClient({});
+const dynamoDB = new AWS.DynamoDB.DocumentClient();
 const TABLE_NAME = process.env.TABLE_NAME || "";
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
     try {
-        // Parsing
-        const reviewId = event.pathParameters?.reviewId;
-        const movieId = event.pathParameters?.movieId;
-        const body = event.body ? JSON.parse(event.body) : null;
-        const updatedContent = body.content;
+        if (!event.requestContext.authorizer || !event.requestContext.authorizer.claims) {
+            return {
+                statusCode: 401,
+                body: JSON.stringify({ message: "Unauthorized - Missing Token" }),
+            };
+        }
 
-        // Parameters check
-        if (!reviewId || !movieId || !body?.content) {
+        // get userId
+        const userId = event.requestContext.authorizer.claims.sub;
+
+        const movieId: string = event.pathParameters?.movieId || "";
+        const reviewId: string = event.pathParameters?.reviewId || "";
+
+        if (!movieId || !reviewId) {
+            console.error("Missing path parameters:", event.pathParameters);
             return {
                 statusCode: 400,
-                body: JSON.stringify({ error: "Missing reviewId, movieId, or content" }),
+                body: JSON.stringify({ message: "Bad Request - Missing movieId or reviewId" }),
             };
         }
 
-        // Check if the comment exists first
-        const getParams = {
+        const params = {
             TableName: TABLE_NAME,
             Key: {
-                "MovieId": { S: movieId },
-                "ReviewId": { S: reviewId }
-            }
+                MovieId: movieId,
+                ReviewId: reviewId,
+            },
         };
 
-        const getResult = await dynamoDbClient.send(new GetItemCommand(getParams));
+        const { Item } = await dynamoDB.get(params).promise();
 
-        if (!getResult.Item) {
+        if (!Item) {
             return {
                 statusCode: 404,
-                body: JSON.stringify({ error: "Review not found" }),
+                body: JSON.stringify({ message: "Review not found" }),
             };
         }
 
-        // update DynamoDB review content
+        const reviewerId = Item.ReviewerId || "Undefined";
+
+        if (reviewerId !== userId) {
+            return {
+                statusCode: 403,
+                body: JSON.stringify({
+                    message: "Forbidden - You are not authorized to update this review",
+                    authenticatedUser: userId,
+                    reviewOwner: reviewerId || "Undefined",
+                }),
+            };
+        }
+
+        const body = JSON.parse(event.body || "{}");
+        if (!body.content) {
+            return {
+                statusCode: 400,
+                body: JSON.stringify({ message: "Bad Request - Missing content in body" }),
+            };
+        }
+
+        // update content
         const updateParams = {
             TableName: TABLE_NAME,
-            Key: {
-                "MovieId": { S: movieId },
-                "ReviewId": { S: reviewId }
-            },
-            UpdateExpression: "SET Content = :content, ReviewDate = :date",
+            Key: { MovieId: movieId, ReviewId: reviewId },
+            UpdateExpression: "SET Content = :content",
             ExpressionAttributeValues: {
-                ":content": { S: updatedContent },
-                ":date": { S: new Date().toISOString() }
+                ":content": body.content,
             },
-            ReturnValues: ReturnValue.UPDATED_NEW
         };
 
-        await dynamoDbClient.send(new UpdateItemCommand(updateParams));
+        await dynamoDB.update(updateParams).promise();
 
         return {
             statusCode: 200,
-            body: JSON.stringify({
-                message: "Review updated successfully",
-                movieId,
-                reviewId,
-                updatedContent: body.content
-            }),
+            body: JSON.stringify({ message: "Review updated successfully" }),
         };
 
     } catch (error) {
