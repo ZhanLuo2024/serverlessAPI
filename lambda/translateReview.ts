@@ -1,118 +1,116 @@
-import {
-    DynamoDBClient,
-    GetItemCommand,
-    PutItemCommand,
-    QueryCommand,
-    PutItemCommandInput
-} from "@aws-sdk/client-dynamodb";
-import { TranslateClient, TranslateTextCommand } from "@aws-sdk/client-translate";
-import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
+import * as AWS from "aws-sdk";
 
-const dynamoDbClient = new DynamoDBClient({});
-const translateClient = new TranslateClient({});
-const TABLE_NAME = process.env.TABLE_NAME || "";
-const INDEX_NAME = "TargetLanguageIndex";
+const dynamoDB = new AWS.DynamoDB.DocumentClient();
+const translate = new AWS.Translate();
 
-export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+interface APIGatewayEvent {
+    pathParameters?: {
+        movieId?: string;
+        reviewId?: string;
+    };
+    queryStringParameters?: {
+        language?: string;
+    };
+}
+
+exports.handler = async (event: APIGatewayEvent): Promise<{ statusCode: number; body: string }> => {
+    console.log("Lambda Triggered! Event:", JSON.stringify(event, null, 2));
+
+    const { movieId, reviewId } = event.pathParameters || {};
+    const targetLanguage = event.queryStringParameters?.language;
+    if (!movieId || !reviewId || !targetLanguage) {
+        console.log("Missing parameters");
+        return { statusCode: 400, body: JSON.stringify({ error: "Missing movieId, reviewId, or language" }) };
+    }
+
+    const tableName = process.env.MOVIE_REVIEWS_TABLE;
+    if (!tableName) {
+        console.error("MOVIE_REVIEWS_TABLE is not defined");
+        return { statusCode: 500, body: JSON.stringify({ error: "Internal Server Error" }) };
+    }
+
     try {
-        // Parse API Gateway Request Parameters
-        const reviewId = event.pathParameters?.reviewId;
-        const movieId = event.pathParameters?.movieId;
-        const targetLanguage = event.queryStringParameters?.language;
+        console.log("Checking if translation exists in DynamoDB...");
 
-        // Validation Parameters
-        if (!reviewId || !movieId || !targetLanguage) {
-            return {
-                statusCode: 400,
-                body: JSON.stringify({ error: "Missing reviewId, movieId, or targetLanguage" }),
-            };
-        }
-
-        // Query the DynamoDB cache to see if the translation result already exists
-        const cacheParams = {
-            TableName: TABLE_NAME,
-            IndexName: INDEX_NAME,
-            KeyConditionExpression: "ReviewId = :r AND TargetLanguage = :t",
+        const queryParams: AWS.DynamoDB.DocumentClient.QueryInput = {
+            TableName: tableName,
+            IndexName: "TargetLanguageIndex",
+            KeyConditionExpression: "ReviewId = :reviewId AND TargetLanguage = :targetLanguage",
             ExpressionAttributeValues: {
-                ":r": { S: reviewId },
-                ":t": { S: targetLanguage }
-            }
+                ":reviewId": reviewId,
+                ":targetLanguage": targetLanguage,
+            },
         };
 
-        const cacheResult = await dynamoDbClient.send(new QueryCommand(cacheParams));
-
-        if (cacheResult.Items?.length && cacheResult.Items.length > 0) {
-            const cachedItem = cacheResult.Items[0];
+        const cachedResult = await dynamoDB.query(queryParams).promise();
+        if (cachedResult.Items && cachedResult.Items.length > 0) {
+            console.log("Cached translation found:", cachedResult.Items[0].TranslatedContent);
             return {
                 statusCode: 200,
                 body: JSON.stringify({
-                    movieId,
-                    reviewId,
-                    targetLanguage,
-                    originalText: cachedItem?.OriginalContent?.S ?? "N/A",
-                    translatedText: cachedItem?.TranslatedText?.S ?? "N/A"
+                    translatedText: cachedResult.Items[0].TranslatedContent,
+                    source: "cache"
                 })
             };
         }
 
-        // If there is no cache, then query the original comment.
-        const getOriginalParams = {
-            TableName: TABLE_NAME,
+        console.log("🆕 No cached translation found, fetching original content...");
+
+        const getParams: AWS.DynamoDB.DocumentClient.GetItemInput = {
+            TableName: tableName,
             Key: {
-                "MovieId": { S: movieId },
-                "ReviewId": { S: reviewId }
-            }
+                MovieId: reviewId,
+                ReviewId: movieId,
+            },
         };
 
-        const originalItem = await dynamoDbClient.send(new GetItemCommand(getOriginalParams));
+        console.log("DynamoDB Querying with Params:", JSON.stringify(getParams, null, 2));
 
-        if (!originalItem.Item || !originalItem.Item.Content || !originalItem.Item.Content.S) {
-            return {
-                statusCode: 404,
-                body: JSON.stringify({ error: "Review not found" })
-            };
+        const result = await dynamoDB.get(getParams).promise();
+        if (!result.Item) {
+            console.log("Review not found in DynamoDB");
+            return { statusCode: 404, body: JSON.stringify({ error: "Review not found" }) };
         }
 
-        const originalText = originalItem.Item.Content.S;
+        const reviewContent = result.Item?.Content;
+        if (!reviewContent) {
+            console.error("Review content is missing in DynamoDB!");
+            return { statusCode: 500, body: JSON.stringify({ error: "Review content missing" }) };
+        }
 
-        // Call AWS Translate for translation
-        const translateParams = {
-            Text: originalText,
+        console.log("Translating content:", reviewContent);
+        const translateParams: AWS.Translate.Types.TranslateTextRequest = {
+            Text: reviewContent,
             SourceLanguageCode: "en",
-            TargetLanguageCode: targetLanguage
+            TargetLanguageCode: targetLanguage,
         };
 
-        const translation = await translateClient.send(new TranslateTextCommand(translateParams));
-        const translatedText = translation.TranslatedText;
+        const translation = await translate.translateText(translateParams).promise();
+        console.log("Translation Success:", translation.TranslatedText);
 
-        // Storing translation results into DynamoDB as a cache
-        const putParams: PutItemCommandInput = {
-            TableName: TABLE_NAME,
+        // result store in to db
+        const putParams: AWS.DynamoDB.DocumentClient.PutItemInput = {
+            TableName: tableName,
             Item: {
-                "MovieId": { S: movieId },
-                "ReviewId": { S: reviewId },
-                "TargetLanguage": { S: targetLanguage },
-                "TranslatedText": { S: translatedText ?? "N/A" },
-                "OriginalContent": { S: originalText ?? "N/A" }
-            }
+                MovieId: movieId,
+                ReviewId: reviewId,
+                TargetLanguage: targetLanguage,
+                TranslatedContent: translation.TranslatedText,
+            },
         };
 
+        await dynamoDB.put(putParams).promise();
+        console.log("Translation cached in DynamoDB:", translation.TranslatedText);
 
-        await dynamoDbClient.send(new PutItemCommand(putParams));
-
-        // return result
         return {
             statusCode: 200,
             body: JSON.stringify({
-                movieId,
-                reviewId,
-                targetLanguage,
-                originalText,
-                translatedText
+                translatedText: translation.TranslatedText,
+                source: "translate"
             })
         };
-    } catch (error: any) {
+    } catch (error) {
         console.error("Translation Error:", error);
-        return { statusCode: 500, body: JSON.stringify({ error: "Internal Server Error", details: error.message }) };
+        return { statusCode: 500, body: JSON.stringify({ error: "Internal Server Error" }) };
     }
 };

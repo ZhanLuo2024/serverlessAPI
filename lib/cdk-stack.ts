@@ -6,6 +6,8 @@ import * as apigateway from "aws-cdk-lib/aws-apigateway";
 import * as iam from "aws-cdk-lib/aws-iam";
 // cognito
 import { createCognito } from "../cognito/cognito";
+// construct
+import { MovieReviewLambda } from "../Construct/MovieReviewLambda";
 
 export class ServerlessAPIStack extends cdk.Stack {
   constructor(scope: cdk.App, id: string, props?: cdk.StackProps) {
@@ -32,169 +34,100 @@ export class ServerlessAPIStack extends cdk.Stack {
     });
 
     /**
-     * create lambda function
-     * GET Reviews
-     **/
-    const getReviewsLambda = new NodejsFunction(this, 'GetReviewsLambda', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      entry: 'lambda/getReviews.ts',
-      handler: 'handler',
-      memorySize: 256,
-      timeout: cdk.Duration.seconds(10),
-      environment: {
-        TABLE_NAME: movieReviewsTable.tableName,
+     * create cognito
+     * */
+    const { userPool, userPoolClient } = createCognito(this);
+    const authorizer = new apigateway.CognitoUserPoolsAuthorizer(this, "APIAuthorizer", {
+      cognitoUserPools: [userPool],
+    });
+
+    /**
+     * create lambda function by construct
+     * */
+    const reviewLambda = new MovieReviewLambda(this, 'ReviewLambda', movieReviewsTable.tableArn)
+
+    /**
+     * set translate permission
+     * */
+    reviewLambda.translateReviewFunc.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ["translate:TranslateText"],
+          resources: ["*"],
+        })
+    );
+
+
+    /**
+     * create API Gateway
+     * */
+    const api = new apigateway.RestApi(this, 'RestApi', {
+      description: 'Movie Review API',
+      endpointTypes: [apigateway.EndpointType.REGIONAL],
+      defaultCorsPreflightOptions: {
+        allowOrigins: apigateway.Cors.ALL_ORIGINS
       },
     });
 
     /**
-     * create lambda function
-     * POST Create Review
+     * API setup
      * */
-    const createReviewLambda = new NodejsFunction(this, 'CreateReviewLambda', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      entry: 'lambda/createReview.ts',
-      handler: 'handler',
-      memorySize: 256,
-      timeout: cdk.Duration.seconds(10),
-      environment: {
-        TABLE_NAME: movieReviewsTable.tableName,
-      },
-    });
+    const reviews = api.root
+        .addResource("movies")
+        .addResource("reviews");
+
+    const movieIdResource = reviews
+        .addResource("{movieId}");
+
+    const reviewIdResource = movieIdResource
+        .addResource("{reviewId}");
+
+    const translationResource = api.root
+        .addResource("reviews")
+        .addResource("{reviewId}")
+        .addResource("{movieId}")
+        .addResource("translation");
 
     /**
-     * create lambda function
-     * GET Translate Review
+     * setting request method binding with lambda
      * */
-    const translateReviewLambda = new NodejsFunction(this, 'TranslateReviewLambda', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      entry: 'lambda/translateReview.ts',
-      handler: 'handler',
-      memorySize: 256,
-      timeout: cdk.Duration.seconds(10),
-      environment: {
-        TABLE_NAME: movieReviewsTable.tableName
-      }
-    });
-
-    /**
-     * create lambda function
-     * PUT update review
-     * */
-    const updateReviewLambda = new NodejsFunction(this, 'UpdateReviewLambda', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      entry: 'lambda/updateReview.ts',
-      handler: 'handler',
-      memorySize: 256,
-      timeout: cdk.Duration.seconds(10),
-      environment: {
-        TABLE_NAME: movieReviewsTable.tableName
-      }
-    });
-
-    /**
-     * Giving Lambda access to DynamoDB
-     * */
-    movieReviewsTable.grantReadData(getReviewsLambda);
-    movieReviewsTable.grantWriteData(createReviewLambda);
-    movieReviewsTable.grantReadData(translateReviewLambda);
-    movieReviewsTable.grantReadWriteData(updateReviewLambda);
-
-    /**
-     * Allow Lambda function access AWS Translate
-     * */
-    translateReviewLambda.addToRolePolicy(new iam.PolicyStatement({
-      actions: ["translate:TranslateText"],
-      resources: ["*"],
-    }));
-
-    /**
-     * Allow translatelambda have write permission*/
-    translateReviewLambda.addToRolePolicy(new iam.PolicyStatement({
-      actions: ["dynamodb:PutItem"],
-      resources: [movieReviewsTable.tableArn],
-    }));
-
-    /**
-     * Allow update lambda function have read and write permission*/
-    updateReviewLambda.addToRolePolicy(new iam.PolicyStatement({
-      actions: ["dynamodb:UpdateItem", "dynamodb:GetItem"],
-      resources: [movieReviewsTable.tableArn],
-    }));
-
-
-    /**
-     * API Gateway
-     */
-    const api = new apigateway.RestApi(this, 'MovieReviewAPI', {
-      restApiName: 'Movie Review Service',
-      description: 'API for managing movie reviews'
-    });
-
-    /**
-     * Cognito
-     * */
-    const { userPool, userPoolClient } = createCognito(this)
-
-    /**
-     * Cognito Authorizer
-     * */
-    const authorizer = new apigateway.CognitoUserPoolsAuthorizer(this, 'APIGatewayCognitoAuthorizer', {
-      cognitoUserPools: [userPool]
-    });
-
-    /**
-     *  API endpoint
-     */
-
-    // /movies
-    const movies = api.root.addResource('movies');
-
-    // /movies/reviews
-    const reviews = movies.addResource('reviews');
-
-    // /movies/reviews/{movieId}
-    const movieId = reviews.addResource('{movieId}');
-
-    // /movies/reviews/{movieId}/reviews
-    const reviewSubPath = movieId.addResource('reviews');
-
-    // /movies/reviews/{movieId}/reviews/{reviewId}
-    const reviewId = reviewSubPath.addResource('{reviewId}');
-
-    // /movies/reviews/{movieId}/reviews/{reviewId}/translation
-    const translation = reviewId.addResource('translation');
-
-    /**
-     *   Lambda trigger
-     */
-
     // GET /movies/reviews/{movieId}
-    movieId.addMethod('GET', new apigateway.LambdaIntegration(getReviewsLambda));
+    movieIdResource.addMethod(
+        "GET",
+        new apigateway.LambdaIntegration(reviewLambda.getReviewFunc)
+    );
+
+    // POST /movies/reviews
+    reviews.addMethod(
+        "POST",
+        new apigateway.LambdaIntegration(reviewLambda.createReviewFunc),
+        {
+          authorizationType: apigateway.AuthorizationType.COGNITO,
+          authorizer,
+        }
+    );
+
+    // PUT /movies/{movieId}/reviews/{reviewId}
+    reviewIdResource.addMethod(
+        "PUT",
+        new apigateway.LambdaIntegration(reviewLambda.updateReviewFunc),
+        {
+          authorizationType: apigateway.AuthorizationType.COGNITO,
+          authorizer,
+        }
+    );
+
+    // GET /reviews/{reviewId}/{movieId}/translation?language=code
+    translationResource.addMethod(
+        "GET",
+        new apigateway.LambdaIntegration(reviewLambda.translateReviewFunc)
+    );
 
     /**
-     * POST /movies/reviews
-     * Binding authorizer to POST API
+     * permission setting
      * */
-    reviews.addMethod("POST", new apigateway.LambdaIntegration(createReviewLambda), {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO
-    });
-
-    // GET /movies/reviews/{movieId}/reviews/{reviewId}/translation
-    translation.addMethod('GET', new apigateway.LambdaIntegration(translateReviewLambda));
-
-    /**
-     * PUT /movies/reviews/{movieId}/reviews/{reviewId}
-     * Binding authorizer to PUT API
-     * */
-    reviewId.addMethod("PUT", new apigateway.LambdaIntegration(updateReviewLambda), {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO
-    });
-
-
-
-
-
+    movieReviewsTable.grantReadWriteData(reviewLambda.getReviewFunc);
+    movieReviewsTable.grantReadWriteData(reviewLambda.createReviewFunc);
+    movieReviewsTable.grantReadWriteData(reviewLambda.updateReviewFunc);
+    movieReviewsTable.grantReadWriteData(reviewLambda.translateReviewFunc);
   }
 }
