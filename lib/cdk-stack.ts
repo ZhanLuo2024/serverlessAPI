@@ -4,10 +4,9 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as apigateway from "aws-cdk-lib/aws-apigateway";
 import * as iam from "aws-cdk-lib/aws-iam";
-// cognito
 import { createCognito } from "../cognito/cognito";
-// construct
 import { MovieReviewLambda } from "../Construct/MovieReviewLambda";
+import { AuthLambda } from "../Construct/auth-construct";
 
 export class ServerlessAPIStack extends cdk.Stack {
   constructor(scope: cdk.App, id: string, props?: cdk.StackProps) {
@@ -19,8 +18,8 @@ export class ServerlessAPIStack extends cdk.Stack {
      *  set sortKey
      *  */
     const movieReviewsTable = new dynamodb.Table(this, 'MovieReviews', {
-      partitionKey: {name: 'MovieId', type: dynamodb.AttributeType.STRING},
-      sortKey: {name: 'ReviewId', type: dynamodb.AttributeType.STRING},
+      partitionKey: { name: 'MovieId', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'ReviewId', type: dynamodb.AttributeType.STRING },
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
@@ -45,6 +44,7 @@ export class ServerlessAPIStack extends cdk.Stack {
      * create lambda function by construct
      * */
     const reviewLambda = new MovieReviewLambda(this, 'ReviewLambda', movieReviewsTable.tableArn)
+    const authLambda = new AuthLambda(this, "AuthLambda", userPool.userPoolId, userPoolClient.userPoolClientId);
 
     /**
      * set translate permission
@@ -56,6 +56,7 @@ export class ServerlessAPIStack extends cdk.Stack {
         })
     );
 
+    movieReviewsTable.grantReadData(reviewLambda.translateReviewFunc);
 
     /**
      * create API Gateway
@@ -71,16 +72,9 @@ export class ServerlessAPIStack extends cdk.Stack {
     /**
      * API setup
      * */
-    const reviews = api.root
-        .addResource("movies")
-        .addResource("reviews");
-
-    const movieIdResource = reviews
-        .addResource("{movieId}");
-
-    const reviewIdResource = movieIdResource
-        .addResource("{reviewId}");
-
+    const reviews = api.root.addResource("movies").addResource("reviews");
+    const movieIdResource = reviews.addResource("{movieId}");
+    const reviewIdResource = movieIdResource.addResource("{reviewId}");
     const translationResource = api.root
         .addResource("reviews")
         .addResource("{reviewId}")
@@ -91,36 +85,22 @@ export class ServerlessAPIStack extends cdk.Stack {
      * setting request method binding with lambda
      * */
     // GET /movies/reviews/{movieId}
-    movieIdResource.addMethod(
-        "GET",
-        new apigateway.LambdaIntegration(reviewLambda.getReviewFunc)
-    );
+    movieIdResource.addMethod("GET", new apigateway.LambdaIntegration(reviewLambda.getReviewFunc));
 
     // POST /movies/reviews
-    reviews.addMethod(
-        "POST",
-        new apigateway.LambdaIntegration(reviewLambda.createReviewFunc),
-        {
-          authorizationType: apigateway.AuthorizationType.COGNITO,
-          authorizer,
-        }
-    );
+    reviews.addMethod("POST", new apigateway.LambdaIntegration(reviewLambda.createReviewFunc), {
+      authorizationType: apigateway.AuthorizationType.COGNITO,
+      authorizer,
+    });
 
     // PUT /movies/{movieId}/reviews/{reviewId}
-    reviewIdResource.addMethod(
-        "PUT",
-        new apigateway.LambdaIntegration(reviewLambda.updateReviewFunc),
-        {
-          authorizationType: apigateway.AuthorizationType.COGNITO,
-          authorizer,
-        }
-    );
+    reviewIdResource.addMethod("PUT", new apigateway.LambdaIntegration(reviewLambda.updateReviewFunc), {
+      authorizationType: apigateway.AuthorizationType.COGNITO,
+      authorizer,
+    });
 
     // GET /reviews/{reviewId}/{movieId}/translation?language=code
-    translationResource.addMethod(
-        "GET",
-        new apigateway.LambdaIntegration(reviewLambda.translateReviewFunc)
-    );
+    translationResource.addMethod("GET", new apigateway.LambdaIntegration(reviewLambda.translateReviewFunc));
 
     /**
      * permission setting
@@ -128,6 +108,13 @@ export class ServerlessAPIStack extends cdk.Stack {
     movieReviewsTable.grantReadWriteData(reviewLambda.getReviewFunc);
     movieReviewsTable.grantReadWriteData(reviewLambda.createReviewFunc);
     movieReviewsTable.grantReadWriteData(reviewLambda.updateReviewFunc);
-    movieReviewsTable.grantReadWriteData(reviewLambda.translateReviewFunc);
+
+    /**
+     * auth API binding
+     * */
+    const auth = api.root.addResource("auth");
+    auth.addResource("signup").addMethod("POST", new apigateway.LambdaIntegration(authLambda.signupFunc));
+    auth.addResource("signin").addMethod("POST", new apigateway.LambdaIntegration(authLambda.signinFunc));
+    auth.addResource("signout").addMethod("POST", new apigateway.LambdaIntegration(authLambda.signoutFunc));
   }
 }
