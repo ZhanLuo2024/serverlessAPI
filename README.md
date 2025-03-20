@@ -1,87 +1,132 @@
-# Serverless API
+# Enterprise Web Development module - Serverless REST Assignment
 
-This is a serverless API for managing movie reviews, built using AWS CDK and deployed on AWS.
-
-## Table of Content
-1. [Project Overview](#project-overview)
-2. [System Architecture](#system-architecture)
-3. [API Endpoints](#api-endpoints)
-4. [Authentication & Authorization](#authentication--authorization)
-5. [Database Schema](#database-schema)
-6. [Technology Stack](#technology-stack)
-7. [Deployment Guide](#deployment-guide)
-8. [API Testing](#api-testing)
-9. [Completed Features](#completed-features)
-10. [Next steps](#next-setps)
----
+Name: Zhan Luo
+Demo:
 
 ## Project Overview
 This project is **serverless API** that let user **create, update and view movie reviews**.  
 It also **support translation** using **Amazon Translate**, so review can be read in different languages.
-
-**Main Features**:
-- **CRUD operations for movie reviews**
-- **User authentication by Cognito**
-- **Support multi-language translation**
-- **DynamoDB as a NoSQL database**
-- **API Gateway Validation for secure input**
-- **Fully Serverless using AWS CDK**
-
 ---
 
-## System Architecture
-The API is **fully serverless**, which means **no server to maintain**, everything runs on AWS.
+## App API Endpoints
+- GET /movies/reviews/{movieId} - Retrieve all reviews for a given movie.
+- POST /movies/reviews - Add a movie review (Requires Authentication).
+- PUT /movies/{movieId}/reviews/{reviewId} - Update an existing review (Only the original author can modify).
+- GET /reviews/{reviewId}/{movieId}/translation?language=code - Translate a review using Amazon Translate, with caching to DynamoDB.
 
-1. **API Gateway**: All request goes here first.
-2. **Cognito**: Handle user sign up and login.
-3. **Lambda Functions**:
-   - Handle **create, update, get** movie review.
-   - Call **Amazon Translate** for language support.
-4. **DynamoDB**: Save movie reviews and translation cache.
-5. **Amazon Translate**: Provide translation service.
-6. **API Gateway Validation**: Reject invalid request before Lambda run.
-
-** Architecture Diagram **
-![Architecture Diagram](docs/Architecture.png)
-
+**Auth API Endpoints**
+- POST /auth/signup - User signup with email and password (Requires email verification).
+- POST /auth/signin - User login, returns an ID Token, Access Token, and Refresh Token.
+- POST /auth/signout - Logs out the user, invalidating the token.
 ---
 
-## API Endpoints
-| Method | Endpoint | Description | Authentication |
-|--------|---------|------------|---------------|
-| **GET** | `/movies/reviews/{movieId}` | Get reviews for movie | ❌ No need |
-| **POST** | `/movies/reviews` | Add new review | ✅ Need login |
-| **PUT** | `/movies/{movieId}/reviews/{reviewId}` | Edit review | ✅ Need login (Only owner) |
-| **GET** | `/reviews/{reviewId}/{movieId}/translation?language=code` | Translate review | ❌ No need |
-| **POST** | `/auth/signup` | User sign up | ❌ No need |
-| **POST** | `/auth/signin` | User login, get token | ❌ No need |
-| **POST** | `/auth/signout` | User logout | ✅ Need login |
+## Features
+**Translation cache**
+To reduce API costs, translations are stored in DynamoDB. If a translation request is made again for the same language, the API returns the cached result instead of making a new API call to Amazon Translate.
 
----
-
-## Database Schema
-
-| Attribute | Type | Notes |
-|-----------|------|-------|
-| **MovieId** | `String` (PK) | Unique movie ID |
-| **ReviewId** | `String` (SK) | Auto-generated review ID |
-| **ReviewerId** | `String` | Cognito User ID |
-| **ReviewDate** | `String` (ISO 8601) | When review created |
-| **Content** | `String` | Review text |
-| **TargetLanguage** | `String` (GSI) | Used for translation |
+**DynamoDB Table Structure**
+- Movield (Partition Key)  - String
+- ReviewId (Sort Key)    - String
+- ReviewerId - String (e.g., 724534c4-5071-70f2-6d59-516355fdb82b)
+- ReviewDate - String (e.g., "2025-01-20")
+- Content - String (original review text)
+- TargetLanguage - String
+- TranslatedContent - String
 
 **Note:** The requirement say **MovieId & ReviewId should be Number**, but we use **String** to better support API.
 
+
+**Custom Constructs**
+The project includes two CDK custom constructs to simplify Lambda function management:
+- MovieReviewLambda Construct - Manages all Lambda functions related to reviews.
+- AuthLambda Construct - Manages all Lambda functions related to authentication.
+
+
+**Restricted Review Update**
+- Only the original reviewer can update their review.
+- The API first validates the user’s identity using Cognito.
+- DynamoDB is queried to check if the user is the original author.
+
+**API Gateway Validators**
+- POST /movies/reviews
+- PUT /movies/{movieId}/reviews/{reviewId}
+- GET /reviews/{reviewId}/{movieId}/translation?language=code
+
+Example:
+   ```typescript
+   const requestValidator = new apigateway.RequestValidator(this, "RequestValidator", {
+   restApi: api,
+   validateRequestBody: true,
+   validateRequestParameters: true,
+});
+
+const createReviewModel = api.addModel("CreateReviewModel", {
+   schema: {
+      type: apigateway.JsonSchemaType.OBJECT,
+      properties: {
+         movieId: { type: apigateway.JsonSchemaType.STRING },
+         content: { type: apigateway.JsonSchemaType.STRING },
+      },
+      required: ["movieId", "content"],
+   },
+});
+
+reviews.addMethod("POST", new apigateway.LambdaIntegration(reviewLambda.createReviewFunc), {
+   requestValidator: requestValidator,
+   requestModels: { "application/json": createReviewModel },
+   authorizationType: apigateway.AuthorizationType.COGNITO,
+   authorizer,
+});
+
+   ```
+
 ---
 
-## Authentication & Authorization
-**Cognito User Pool**
-- User **must sign up with email and password**
-- Only **authenticated user can post and update reviews**
+## Extra
+1. DynamoDB Global Secondary Index (GSI) for Translation Caching  
+   To optimize translation calls, we implemented a Global Secondary Index (GSI) that allows fetching pre-translated reviews instead of calling Amazon Translate each time. This significantly reduces costs.
 
-**Authorization Rules**
-- **Only the reviewer** can **update their own review**
-- **API Gateway validation check** before request go to Lambda
+   **Implementation**
+   - A GSI named TargetLanguageIndex is added to the MovieReviews table.
+   - It allows efficient lookup of translated reviews.
+
+   **Reference**
+      - [AWS DynamoDB Global Secondary Indexes](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.html)
+
+---
+2. Custom CDK Constructs  
+   we created custom construct for better organization.  
+   **Benefit**
+   - Improve code modularity.
+   - Easier to test.  
+   
+   **Reference**
+   - [AWS CDK Custom Constructs](https://docs.aws.amazon.com/cdk/v2/guide/constructs.html)
+---
+3. API Gateway Validators  
+   use API Gateway Validators to reject invalid requests before they reach the backend. This reduces unnecessary Lambda execution.  
+
+   **Implementation**
+   - Request models and validation rules are set in API Gateway.
+   - Invalid requests are blocked at the API layer.
+
+   **Reference**
+   - [AWS API Gateway Request Validators](https://docs.aws.amazon.com/apigateway/latest/developerguide/welcome.html)
+---
+4. Cognito User Authentication & Token Revocation.  
+   To ensure users can sign up, sign in, and sign out securely
+   **Implementation**
+   - A modular Cognito setup (createCognito.ts) allows flexible configuration.
+   - Logout API (signout.ts) explicitly revokes refresh tokens to increase security.
+
+   **Reference**
+   - [AWS Cognito Authentication](https://docs.aws.amazon.com/cognito/latest/developerguide/authentication.html)
+   - [Cognito Token Revocation](https://docs.aws.amazon.com/cognito/latest/developerguide/logout-endpoint.html)
+
+---
+
+## Architecture Diagram
+![Architecture Diagram](docs/Architecture.png)
 
 ---
 
@@ -106,18 +151,7 @@ The API is **fully serverless**, which means **no server to maintain**, everythi
    npm install -g aws-cdk
    npm install
 
-
 3. **Deployment**:
     ```bash
    cdk deploy
 
-##  Completed Features
-- CRUD for movie reviews
-- Cognito Authentication & Authorization
-- DynamoDB with GSI for Translations
-- API Gateway Request Validation
-- Custom Construct for Lambda Management
-
-## Next steps
-- Better Error Handing
-- More log using CloudWatch
