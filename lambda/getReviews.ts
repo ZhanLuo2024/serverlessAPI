@@ -1,44 +1,71 @@
+/**
+ * Get review API
+ *
+ * Allow all users to get the movie review list
+ * return 200 OK
+ *
+ * validation
+ * movieId: Must exist and be a non-empty string
+ */
+
+import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
 import * as AWS from "aws-sdk";
 
 const dynamoDB = new AWS.DynamoDB.DocumentClient();
+const TABLE_NAME = process.env.MOVIE_REVIEWS_TABLE || "";
 
-interface APIGatewayEvent {
-    pathParameters?: {
-        movieId?: string;
-    };
-}
-
-exports.handler = async (event: APIGatewayEvent): Promise<{ statusCode: number; body: string }> => {
-    console.log("Lambda Triggered! Event:", JSON.stringify(event, null, 2));
-
-    const movieId = event.pathParameters?.movieId;
-    if (!movieId) {
-        console.log("Missing movieId in path");
-        return { statusCode: 400, body: JSON.stringify({ error: "Missing movieId" }) };
-    }
-
-    const tableName = process.env.MOVIE_REVIEWS_TABLE;
-    if (!tableName) {
-        console.error("MOVIE_REVIEWS_TABLE is not defined in environment variables");
-        return { statusCode: 500, body: JSON.stringify({ error: "Internal Server Error" }) };
-    }
-
+export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
     try {
-        console.log("🔍 Querying DynamoDB for MovieId:", movieId);
+        const movieId: string = event.pathParameters?.movieId || "";
+        const reviewId: string | undefined = event.queryStringParameters?.reviewId;
+        const reviewerName: string | undefined = event.queryStringParameters?.reviewerName;
 
-        // `AWS.DynamoDB.DocumentClient.QueryInput`
-        const params: AWS.DynamoDB.DocumentClient.QueryInput = {
-            TableName: tableName,
-            KeyConditionExpression: "MovieId = :movieId",
-            ExpressionAttributeValues: { ":movieId": movieId },
+        if (!movieId) {
+            return {
+                statusCode: 400,
+                body: JSON.stringify({ message: "Bad Request - Missing movieId" }),
+            };
+        }
+
+        let expressionAttributeValues: AWS.DynamoDB.DocumentClient.ExpressionAttributeValueMap = {
+            ":movieId": movieId,
         };
 
-        const result = await dynamoDB.query(params).promise();
-        console.log("DynamoDB Query Success:", JSON.stringify(result.Items, null, 2));
+        let filterExpressions: string[] = [];
 
-        return { statusCode: 200, body: JSON.stringify(result.Items) };
+        if (reviewId) {
+            filterExpressions.push("ReviewId = :reviewId");
+            expressionAttributeValues[":reviewId"] = reviewId;
+        }
+
+        if (reviewerName) {
+            filterExpressions.push("ReviewerId = :reviewerName");
+            expressionAttributeValues[":reviewerName"] = reviewerName;
+        }
+
+        // Query parameters
+        let params: AWS.DynamoDB.DocumentClient.QueryInput = {
+            TableName: TABLE_NAME,
+            KeyConditionExpression: "MovieId = :movieId",
+            ExpressionAttributeValues: expressionAttributeValues,
+        };
+
+        if (filterExpressions.length > 0) {
+            params.FilterExpression = filterExpressions.join(" AND ");
+        }
+
+        // Query DynamoDB
+        const { Items } = await dynamoDB.query(params).promise();
+
+        return {
+            statusCode: 200,
+            body: JSON.stringify({ reviews: Items }),
+        };
     } catch (error) {
-        console.error("DynamoDB Query Error:", error);
-        return { statusCode: 500, body: JSON.stringify({ error: "Internal Server Error" }) };
+        console.error("Error fetching reviews:", error);
+        return {
+            statusCode: 500,
+            body: JSON.stringify({ error: "Internal Server Error" }),
+        };
     }
 };
