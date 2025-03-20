@@ -1,3 +1,16 @@
+/**
+ * User signout API
+ *
+ * Allow user signout
+ * Invalidate Access Tokens Using AWS Cognito
+ * success 200
+ * fail 400 Bad Request or 500 Internal Server Error
+ *
+ * validation
+ * Authorization Header: Must contain accessToken
+ * refreshToken: Must have value
+ */
+
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
 import * as AWS from "aws-sdk";
 
@@ -7,47 +20,48 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     try {
         console.log("Received event:", JSON.stringify(event, null, 2));
 
-        const tokenHeader = event.headers.Authorization || event.headers.authorization;
-        if (!tokenHeader || !tokenHeader.startsWith("Bearer ")) {
+        const authHeader = event.headers.Authorization || event.headers.authorization;
+        if (!authHeader || !authHeader.startsWith("Bearer ")) {
             return {
                 statusCode: 400,
-                body: JSON.stringify({ error: "Missing accessToken" }),
+                body: JSON.stringify({ error: "Missing or invalid Authorization header" }),
             };
         }
+        const accessToken = authHeader.split(" ")[1];
 
-        const accessToken = tokenHeader.split(" ")[1];
-
+        // get Refresh Token
         if (!event.body) {
             return {
                 statusCode: 400,
                 body: JSON.stringify({ error: "Missing request body" }),
             };
         }
-
         const body = JSON.parse(event.body);
         const refreshToken = body.refreshToken;
 
         if (!refreshToken) {
             return {
                 statusCode: 400,
-                body: JSON.stringify({ error: "Missing refreshToken" }),
+                body: JSON.stringify({ error: "Missing refreshToken in request body" }),
             };
         }
 
-        await cognito.revokeToken({
-            Token: refreshToken,
-            ClientId: process.env.USER_POOL_CLIENT_ID || "", // 确保环境变量正确配置
-        }).promise();
+        console.log("Access Token:", accessToken);
+        console.log("Refresh Token:", refreshToken);
+
+        // let accessToken invalid
+        await cognito.globalSignOut({ AccessToken: accessToken }).promise();
+        console.log("User signed out globally");
 
         return {
             statusCode: 200,
-            body: JSON.stringify({ message: "User successfully signed out" }),
+            body: JSON.stringify({ message: "User signed out successfully" }),
         };
-    } catch (error) {
-        console.error("Error during signout:", error);
+
+    } catch (error: any) {
+        console.error("Signout Error:", error);
         return {
             statusCode: 500,
-            body: JSON.stringify({ error: "Internal Server Error" }),
-        };
+            body: JSON.stringify({ error: "Internal Server Error", details: error.message }) };
     }
 };
