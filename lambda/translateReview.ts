@@ -4,7 +4,7 @@
  * Translating with Amazon Translate
  * Cache translation results to reduce Amazon Translate calls
  * return 200 OK
- * ---------------------------------------------------
+ *
  * validation
  * movieId: Must exist and be a non-empty string
  * reviewId: Must exist and be a non-empty string

@@ -2,7 +2,9 @@ import * as cdk from 'aws-cdk-lib';
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as apigateway from "aws-cdk-lib/aws-apigateway";
 import * as iam from "aws-cdk-lib/aws-iam";
+// cognito
 import { createCognito } from "../cognito/cognito";
+// construct
 import { MovieReviewLambda } from "../Construct/MovieReviewLambda";
 import { AuthLambda } from "../Construct/auth-construct";
 
@@ -12,8 +14,6 @@ export class ServerlessAPIStack extends cdk.Stack {
 
     /**
      *  create DynamoDB table
-     *  set partitionKey
-     *  set sortKey
      *  */
     const movieReviewsTable = new dynamodb.Table(this, 'MovieReviews', {
       partitionKey: { name: 'MovieId', type: dynamodb.AttributeType.STRING },
@@ -34,9 +34,13 @@ export class ServerlessAPIStack extends cdk.Stack {
      * create cognito
      * */
     const { userPool, userPoolClient } = createCognito(this);
-    const authorizer = new apigateway.CognitoUserPoolsAuthorizer(this, "APIAuthorizer", {
-      cognitoUserPools: [userPool],
-    });
+    const authorizer = new apigateway.CognitoUserPoolsAuthorizer(
+        this,
+        "APIAuthorizer",
+        {
+          cognitoUserPools: [userPool],
+        }
+    );
 
     /**
      * create lambda function by construct
@@ -54,8 +58,6 @@ export class ServerlessAPIStack extends cdk.Stack {
         })
     );
 
-    movieReviewsTable.grantReadData(reviewLambda.translateReviewFunc);
-
     /**
      * create API Gateway
      * */
@@ -66,6 +68,45 @@ export class ServerlessAPIStack extends cdk.Stack {
         allowOrigins: apigateway.Cors.ALL_ORIGINS
       },
     });
+
+    /**
+     * API request Models（validation）
+     * */
+    const reviewModel = api.addModel("CreateReviewModel", {
+      contentType: "application/json",
+      modelName: "CreateReviewModel",
+      schema: {
+        type: apigateway.JsonSchemaType.OBJECT,
+        required: ["movieId", "content"],
+        properties: {
+          movieId: { type: apigateway.JsonSchemaType.STRING },
+          content: { type: apigateway.JsonSchemaType.STRING },
+        },
+      },
+    });
+
+    const updateReviewModel = api.addModel("UpdateReviewModel", {
+      contentType: "application/json",
+      modelName: "UpdateReviewModel",
+      schema: {
+        type: apigateway.JsonSchemaType.OBJECT,
+        required: ["content"],
+        properties: {
+          content: { type: apigateway.JsonSchemaType.STRING },
+        },
+      },
+    });
+
+    /**
+     * API Request Validator
+     */
+    const requestValidator = new apigateway.RequestValidator(this, "RequestValidator", {
+          restApi: api,
+          requestValidatorName: "ValidateReviewRequests",
+          validateRequestBody: true,
+          validateRequestParameters: true,
+        }
+    );
 
     /**
      * API setup
@@ -82,23 +123,50 @@ export class ServerlessAPIStack extends cdk.Stack {
     /**
      * setting request method binding with lambda
      * */
-    // GET /movies/reviews/{movieId}
-    movieIdResource.addMethod("GET", new apigateway.LambdaIntegration(reviewLambda.getReviewFunc));
+    // GET /movies/reviews/{movieId} (Request Validator)
+    movieIdResource.addMethod(
+        "GET",
+        new apigateway.LambdaIntegration(reviewLambda.getReviewFunc)
+    );
 
-    // POST /movies/reviews
-    reviews.addMethod("POST", new apigateway.LambdaIntegration(reviewLambda.createReviewFunc), {
-      authorizationType: apigateway.AuthorizationType.COGNITO,
-      authorizer,
-    });
 
-    // PUT /movies/{movieId}/reviews/{reviewId}
-    reviewIdResource.addMethod("PUT", new apigateway.LambdaIntegration(reviewLambda.updateReviewFunc), {
-      authorizationType: apigateway.AuthorizationType.COGNITO,
-      authorizer,
-    });
+    // POST /movies/reviews (Request Model + Cognito Auth)
+    reviews.addMethod(
+        "POST",
+        new apigateway.LambdaIntegration(reviewLambda.createReviewFunc),
+        {
+          authorizationType: apigateway.AuthorizationType.COGNITO,
+          authorizer,
+          requestModels: { "application/json": reviewModel },
+          requestValidator: requestValidator,
+        }
+    );
 
-    // GET /reviews/{reviewId}/{movieId}/translation?language=code
-    translationResource.addMethod("GET", new apigateway.LambdaIntegration(reviewLambda.translateReviewFunc));
+    // PUT /movies/{movieId}/reviews/{reviewId} (Request Model + Cognito Auth)
+    reviewIdResource.addMethod(
+        "PUT",
+        new apigateway.LambdaIntegration(reviewLambda.updateReviewFunc),
+        {
+          authorizationType: apigateway.AuthorizationType.COGNITO,
+          authorizer,
+          requestModels: { "application/json": updateReviewModel },
+          requestValidator: requestValidator,
+        }
+    );
+
+    // GET /reviews/{reviewId}/{movieId}/translation?language=code (Request Validator)
+    translationResource.addMethod(
+        "GET",
+        new apigateway.LambdaIntegration(reviewLambda.translateReviewFunc),
+        {
+          requestValidator: requestValidator,
+          requestParameters: {
+            "method.request.path.reviewId": true,
+            "method.request.path.movieId": true,
+            "method.request.querystring.language": true,
+          },
+        }
+    );
 
     /**
      * permission setting
@@ -106,6 +174,7 @@ export class ServerlessAPIStack extends cdk.Stack {
     movieReviewsTable.grantReadWriteData(reviewLambda.getReviewFunc);
     movieReviewsTable.grantReadWriteData(reviewLambda.createReviewFunc);
     movieReviewsTable.grantReadWriteData(reviewLambda.updateReviewFunc);
+    movieReviewsTable.grantReadWriteData(reviewLambda.translateReviewFunc);
 
     /**
      * auth API binding
