@@ -1,90 +1,84 @@
-import { DynamoDBClient, GetItemCommand, PutItemCommand } from "@aws-sdk/client-dynamodb";
+/**
+ * create review API
+ *
+ * Allow login user to submit movie reviews
+ * Storing movie review in DynamoDB
+ * return 201 Created
+ *
+ * validation
+ * movieId: exist and be a non-empty string
+ * content: exist and be a non-empty string
+ * Only allow logged-in user to submit
+ */
+
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
+import * as AWS from "aws-sdk";
 import { v4 as uuidv4 } from "uuid";
 
-// Init DynamoDB client
-const dynamoDbClient = new DynamoDBClient({});
+const dynamoDB = new AWS.DynamoDB.DocumentClient();
+const TABLE_NAME = process.env.MOVIE_REVIEWS_TABLE || "";
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
     try {
-        if (!event.body) {
-            return { statusCode: 400, body: JSON.stringify({ error: "Request body is required" }) };
-        }
-
-        if (!event.requestContext || !event.requestContext.authorizer || !event.requestContext.authorizer.claims) {
+        // Check the Authorization header
+        if (!event.requestContext.authorizer || !event.requestContext.authorizer.claims) {
             return {
                 statusCode: 401,
-                body: JSON.stringify({ error: "Unauthorized - Missing Cognito Auth" })
+                body: JSON.stringify({ error: "Unauthorized - Missing Token" }),
+            };
+        }
+        const reviewerId = event.requestContext.authorizer.claims.sub; // **从 Cognito 获取用户 ID**
+
+        // Parsing body
+        if (!event.body) {
+            return {
+                statusCode: 400,
+                body: JSON.stringify({ error: "Missing request body" }),
             };
         }
 
-        // get `reviewerId`
-        const claims = event.requestContext.authorizer.claims;
-        const reviewerId = claims.sub || claims.email;  // `sub` 是 Cognito ID，`email` 是用戶郵箱
-        if (!reviewerId) {
-            return { statusCode: 401, body: JSON.stringify({ error: "Unauthorized - Unable to extract user ID" }) };
+        const body = JSON.parse(event.body);
+        const { movieId, content } = body;
+
+        // Input Validation
+        if (!movieId || typeof movieId !== "string" || movieId.trim() === "") {
+            return { statusCode: 400, body: JSON.stringify({ error: "Invalid movieId" }) };
         }
 
-        const { movieId, content } = JSON.parse(event.body);
-
-        if (!movieId || !content) {
-            return { statusCode: 400, body: JSON.stringify({ error: "Missing movieId or content" }) };
+        if (!content || typeof content !== "string" || content.trim() === "") {
+            return { statusCode: 400, body: JSON.stringify({ error: "Review content cannot be empty" }) };
         }
 
-        const tableName = process.env.MOVIE_REVIEWS_TABLE;
-
-        if (!tableName) {
-            return { statusCode: 500, body: JSON.stringify({ error: "Internal Server Error - Table not defined" }) };
-        }
-
+        // generate Review ID
         const reviewId = uuidv4();
 
-        console.log("Checking if this reviewer has already reviewed this movie...");
-
-        // Check if the user has commented on this
-        const getParams = {
-            TableName: tableName,
-            Key: {
-                "MovieId": { S: movieId },
-                "ReviewId": { S: reviewerId },
-            }
-        };
-
-        const existingReview = await dynamoDbClient.send(new GetItemCommand(getParams));
-        if (existingReview.Item) {
-            console.log("This reviewer already reviewed this movie, returning conflict.");
-            return { statusCode: 409, body: JSON.stringify({ error: "Reviewer has already reviewed this movie" }) };
-        }
-
-        console.log("Review does not exist, proceeding with creation...");
-
-        const putParams = {
-            TableName: tableName,
+        // store in to DynamoDB
+        const params = {
+            TableName: TABLE_NAME,
             Item: {
-                "MovieId": { S: movieId },
-                "ReviewId": { S: reviewId },
-                "ReviewerId": { S: reviewerId },
-                "Content": { S: content },
-                "ReviewDate": { S: new Date().toISOString() }
-            }
+                MovieId: movieId,
+                ReviewId: reviewId,
+                ReviewerId: reviewerId,
+                Content: content,
+                ReviewDate: new Date().toISOString(),
+            },
         };
 
-        await dynamoDbClient.send(new PutItemCommand(putParams));
+        await dynamoDB.put(params).promise();
 
-        console.log("Review successfully stored in DynamoDB");
-
-        // return 201
         return {
             statusCode: 201,
             body: JSON.stringify({
                 message: "Review added successfully",
-                reviewId: reviewId,
-                source: "new"
-            })
+                reviewId,
+            }),
         };
 
-    } catch (error) {
-        console.error("Error inserting review:", error);
-        return { statusCode: 500, body: JSON.stringify({ error: "Internal Server Error" }) };
+    } catch (error: any) {
+        console.error("Create Review Error:", error);
+        return {
+            statusCode: 500,
+            body: JSON.stringify({ error: "Internal Server Error", details: error.message }),
+        };
     }
 };
