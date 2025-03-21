@@ -1,11 +1,13 @@
 # Enterprise Web Development module - Serverless REST Assignment
 
-Name: Zhan Luo
-Demo:
+Name: Zhan Luo  
+Demo: https://youtu.be/_wfTQByUfm4  
 
-## Project Overview
+## Project Overview  
+
 This project is **serverless API** that let user **create, update and view movie reviews**.  
 It also **support translation** using **Amazon Translate**, so review can be read in different languages.
+
 ---
 
 ## App API Endpoints
