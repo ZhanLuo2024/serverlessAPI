@@ -34,17 +34,10 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         const movieId = event.pathParameters?.movieId;
         const language = event.queryStringParameters?.language;
 
-        if (!reviewId || !movieId) {
+        if (!reviewId || !movieId || !language) {
             return {
                 statusCode: 400,
-                body: JSON.stringify({ message: "Bad Request - Missing reviewId or movieId" }),
-            };
-        }
-
-        if (!language) {
-            return {
-                statusCode: 400,
-                body: JSON.stringify({ message: "Bad Request - Missing language parameter" }),
+                body: JSON.stringify({ message: "Missing movieId, reviewId or language" }),
             };
         }
 
@@ -52,13 +45,14 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         if (!validLanguages.includes(language)) {
             return {
                 statusCode: 400,
-                body: JSON.stringify({ message: "Bad Request - Unsupported language code" }),
+                body: JSON.stringify({ message: "Unsupported language code" }),
             };
         }
 
+        // check cache
         const cachedTranslation = await dynamoDB.query({
             TableName: TABLE_NAME,
-            IndexName: TRANSLATION_INDEX, // 使用 GSI 來查詢
+            IndexName: TRANSLATION_INDEX,
             KeyConditionExpression: "ReviewId = :reviewId AND TargetLanguage = :language",
             ExpressionAttributeValues: {
                 ":reviewId": reviewId,
@@ -67,16 +61,19 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         }).promise();
 
         if (cachedTranslation.Items && cachedTranslation.Items.length > 0) {
+            console.log("✅ Translation found in cache.");
             return {
                 statusCode: 200,
                 body: JSON.stringify({
                     reviewId,
                     movieId,
-                    translatedContent: cachedTranslation.Items[0].TranslatedContent
+                    translatedContent: cachedTranslation.Items[0].TranslatedContent,
+                    source: "cache"
                 }),
             };
         }
 
+        // get original content
         const reviewData = await dynamoDB.get({
             TableName: TABLE_NAME,
             Key: {
@@ -85,19 +82,23 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
             },
         }).promise();
 
-        if (!reviewData.Item) {
+        console.log("Fetched item:", reviewData.Item);
+
+        if (!reviewData.Item || !reviewData.Item.Content) {
             return {
                 statusCode: 404,
-                body: JSON.stringify({ message: "Review not found" }),
+                body: JSON.stringify({ message: "Review content not found" }),
             };
         }
 
+        // call translate
         const translateResult = await translate.translateText({
             Text: reviewData.Item.Content,
             SourceLanguageCode: "en",
             TargetLanguageCode: language
         }).promise();
 
+        // store in dynamoDB
         await dynamoDB.put({
             TableName: TABLE_NAME,
             Item: {
@@ -113,7 +114,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
             body: JSON.stringify({
                 reviewId,
                 movieId,
-                translatedContent: translateResult.TranslatedText
+                translatedContent: translateResult.TranslatedText,
+                source: "translate"
             }),
         };
 
