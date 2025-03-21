@@ -1,5 +1,5 @@
 /**
- * PUT translate review API
+ * translate review API
  *
  * Translating with Amazon Translate
  * Cache translation results to reduce Amazon Translate calls
@@ -61,7 +61,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         }).promise();
 
         if (cachedTranslation.Items && cachedTranslation.Items.length > 0) {
-            console.log("✅ Translation found in cache.");
+            console.log("Translation found in cache.");
             return {
                 statusCode: 200,
                 body: JSON.stringify({
